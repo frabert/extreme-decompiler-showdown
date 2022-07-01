@@ -1,0 +1,85 @@
+name: VCPKG Continuous Integration
+
+on:
+  push:
+    branches:
+      - 'main'
+
+jobs:
+  build_linux:
+    runs-on: ubuntu-18.04
+    steps:
+      - name: Adding github workspace as safe directory
+        # See issue https://github.com/actions/checkout/issues/760
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Install utility tools
+        shell: bash
+        run: |
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          echo "deb http://apt.llvm.org/bionic/ llvm-toolchain-bionic-14 main" | sudo tee -a /etc/apt/sources.list
+          echo "deb-src http://apt.llvm.org/bionic/ llvm-toolchain-bionic-14 main" | sudo tee -a /etc/apt/sources.list
+          echo "deb http://apt.llvm.org/bionic/ llvm-toolchain-bionic-8 main" | sudo tee -a /etc/apt/sources.list
+          echo "deb-src http://apt.llvm.org/bionic/ llvm-toolchain-bionic-8 main" | sudo tee -a /etc/apt/sources.list
+          sudo apt-get update
+          sudo apt-get install -y pixz xz-utils make rpm python3.8 clang-8 clang-14 ninja-build cmake graphviz-dev
+          sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.8 100
+
+      - name: Download rellic
+        shell: bash
+        run: git clone --recurse-submodules https://github.com/lifting-bits/rellic
+
+      - name: Download cxx-common
+        shell: bash
+        run: |
+          wget https://github.com/lifting-bits/cxx-common/releases/download/v0.2.7/vcpkg_ubuntu-20.04_llvm-14_amd64.tar.xz
+          tar xf vcpkg_ubuntu-20.04_llvm-14_amd64.tar.xz
+
+      - name: Build rellic
+        shell: bash
+        run: |
+          env CC=clang-14 \
+              CXX=clang++-14 \
+              cmake -S rellic \
+                    -B rellic-build \
+                    -G Ninja \
+                    -DRELLIC_ENABLE_INSTALL=OFF \
+                    -DVCPKG_ROOT="$(pwd)/vcpkg_ubuntu-20.04_llvm-14_amd64"
+          cmake --build rellic-build
+
+      - name: Install retdec
+        run: |
+          wget https://github.com/avast/retdec/releases/download/v4.0/retdec-v4.0-ubuntu-64b.tar.xz
+          tar xf retdec-v4.0-ubuntu-64b.tar.xz
+
+      #- name: Install revng
+      #  run: |
+      #    pip3 install --user --force-reinstall https://github.com/revng/revng-orchestra/archive/master.zip
+      #    export PATH="$HOME/.local/bin:$PATH"
+      #    git clone https://github.com/revng/orchestra
+      #    cd orchestra
+      #    orc components
+      #    ./.orchestra/ci/install-dependencies.sh
+      #    git init lfs
+      #    orc update
+      #    orc install toolchain/x86-64/gcc
+      #    orc install revng
+
+      - name: Generate artifact
+        run: |
+          mkdir output
+          env CLANG_LL=clang-8 \
+              CLANG_C=clang-14 \
+              RELLIC="$(pwd)/rellic-build/tools/rellic-decomp" \
+              RETDEC="python3 $(pwd)/retdec/bin/retdec-decompiler.py" \
+              OUTPUT_DIR="$(pwd)/output" \
+              ./generate-report.sh
+      
+      - uses: actions/upload-artifact@v3
+        with:
+          name: report
+          path: output
